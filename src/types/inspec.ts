@@ -2,7 +2,7 @@ export interface InSpecControl {
     id: string;
     title: string;
     desc: string;
-    rationale: string;
+    rationale?: string;
     impact: number;
     tags: {
         check?: string;
@@ -27,6 +27,7 @@ export interface InSpecControl {
         mitigation_controls?: string;
         responsibility?: string;
         ia_controls?: string;
+        cis_controls?: string[];
         [key: string]: string | string[] | boolean | undefined;
     };
 }

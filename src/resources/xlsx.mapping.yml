@@ -1,0 +1,9 @@
+id: "recommendation #"
+title: title
+desc: description
+check: audit procedure
+rationale: rationale statement
+severity: 0.5
+tags.check: audit procedure
+tags.fix: remediation procedure
+tags.cis: CIS controls

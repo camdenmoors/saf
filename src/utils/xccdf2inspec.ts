@@ -88,7 +88,7 @@ export function severityStringToImpact(string: string): number {
   throw new Error(`${string}' is not a valid severity value. It should be one of the approved keywords`)
 }
 
-export function impactStringToSeverity(impact: number): string {
+export function impactNumberToSeverityString(impact: number): string {
   if (impact < 0.0 || impact > 1.0) {
     throw new Error('Impact cannot be less than 0.0 or greater than 1.0')
   } else {
@@ -113,7 +113,7 @@ export function inspecControlToRubyCode(control: InSpecControl): string {
   result += `control '${control.id}' do\n`
   result += `  title '${wrapAndEscape(control.title)}'\n`
   result += `  desc '${wrapAndEscape(control.desc)}'\n`
-  result += `  desc 'rationale' '${wrapAndEscape(control.rationale)}'\n`
+  result += `  desc 'rationale' '${wrapAndEscape(control.rationale || '')}'\n`
   if (control.tags.check) {
     result += `  desc 'check' "${wrapAndEscapeQuotes(control.tags.check)}"\n`
   }

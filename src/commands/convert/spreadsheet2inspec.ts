@@ -1,28 +1,31 @@
 import {Command, flags} from '@oclif/command'
 import fs from 'fs'
 import path from 'path'
+import parse from 'csv-parse/lib/sync'
 import {InSpecControl, InSpecMetaData} from '../../types/inspec'
 import YAML from 'yaml'
 import XlsxPopulate from 'xlsx-populate'
-import {inspecControlToRubyCode} from '../../utils/xccdf2inspec'
+import {impactNumberToSeverityString, inspecControlToRubyCode} from '../../utils/xccdf2inspec'
 import _ from 'lodash'
-
-const findFieldIndex = (field: string, fields: (string | number)[]) => field in fields ? fields.indexOf(field) : undefined
+import {CSVControl} from '../../types/csv'
+import {extractValueViaPathOrNumber, findFieldIndex, getInstalledPath} from '../../utils/global'
+import {default as CCINistMappings} from '@mitre/hdf-converters/lib/data/cci-nist-mapping.json'
+import {default as CISNistMappings} from '../../resources/cis2nist.json'
 
 export default class Spreadsheet2HDF extends Command {
   static usage = 'convert:spreadsheet2inspec -i, --input=<XLSX or CSV> -o, --output=FOLDER'
 
-  static description = 'Pull SonarQube vulnerabilities for the specified project name from an API and convert into a Heimdall Data Format JSON file'
+  static description = 'Convert CSV STIGs or CIS XLSX benchmarks into a skeleton InSpec profile'
 
-  static examples = ['saf convert:sonarqube2hdf -n sonar_project_key -u http://sonar:9000 --auth YOUR_API_KEY -o scan_results.json']
+  static examples = ['saf convert:spreadsheet2inspec -i spreadsheet.xlsx -o profile']
 
   static flags = {
     help: flags.help({char: 'h'}),
     input: flags.string({char: 'i', required: true}),
     controlNamePrefix: flags.string({char: 'c', required: false, default: '', description: 'Prefix for all control IDs'}),
     metadata: flags.string({char: 'm', required: false, description: 'Path to a JSON file with additional metadata for the inspec.yml file'}),
-    singleFile: flags.boolean({char: 's', required: false, default: false, description: 'Output the resulting controls as a single file'}),
-    sheetName: flags.string({char: 'S', required: false, default: 'cis', description: 'Sheet containing controls (for XLSX input)'}),
+    mapping: flags.string({char: 'M', required: false, description: 'Path to a YAML file with mappings for each field, by default, CIS Benchmark fields are used for XLSX, STIG Viewer CSV export is used by CSV'}),
+    severity: flags.string({char: 's', required: false, description: 'Control severity level', default: '0.5', options: ['0.0', '0.1', '0.4', '0.7', '0.9', '1.0']}),
     output: flags.string({char: 'o', required: true}),
   }
 
@@ -40,6 +43,8 @@ export default class Spreadsheet2HDF extends Command {
       fs.mkdirSync(path.join(flags.output, 'libraries'))
     }
     let metadata: InSpecMetaData = {}
+    let mappings: Record<string, string | number> = {}
+
     // Read metadata file if passed
     if (flags.metadata) {
       if (fs.existsSync(flags.metadata)) {
@@ -51,50 +56,55 @@ export default class Spreadsheet2HDF extends Command {
 
     const inspecControls: InSpecControl[] = []
 
+    // Convert profile inspec.yml
+    const profileInfo: Record<string, string | number | undefined> = {
+      name: 'CIS Benchmark',
+      title: 'InSpec Profile',
+      maintainer: metadata.maintainer || 'The Authors',
+      copyright: metadata.copyright || 'The Authors',
+      copyright_email: metadata.copyright_email || 'you@example.com',
+      license: metadata.license || 'Apache-2.0',
+      summary: '"An InSpec Compliance Profile"',
+      version: metadata.version || '0.1.0',
+    }
+
+    fs.writeFileSync(path.join(flags.output, 'inspec.yml'), YAML.stringify(profileInfo))
+
+    // Write README.md
+    const readableMetadata: Record<string, string | number> = {}
+    Object.entries(profileInfo).forEach(async ([key, value]) => {
+      // Filter out any undefined values and omit summary and title
+      if (value && key !== 'summary' && key !== 'summary') {
+        readableMetadata[_.startCase(key)] = value
+      }
+    })
+    fs.writeFileSync(path.join(flags.output, 'README.md'), `# ${profileInfo.name}\n${profileInfo.summary}\n---\n${YAML.stringify(readableMetadata)}`)
+
     await XlsxPopulate.fromFileAsync(flags.input).then((workBook: any) => {
       const targetSheets = [1, 2]
       const completedIds: string[] = [] // Numbers such as 1.10 can get parsed 1.1 which will over-write controls, keep track of existing controls to prevent this
+      // Read mapping file
+      if (flags.mapping) {
+        if (fs.existsSync(flags.mapping)) {
+          mappings = YAML.parse(fs.readFileSync(flags.mapping, 'utf-8'))
+        } else {
+          throw new Error('Passed metadata file does not exist')
+        }
+      } else {
+        mappings = YAML.parse(fs.readFileSync(path.join(getInstalledPath(), 'src', 'resources', 'xlsx.mapping.yml'), 'utf-8'))
+      }
+
       targetSheets.forEach(targetSheet => {
         const sheet = workBook.sheet(targetSheet)
         const extractedData: (string | number)[][] = sheet.usedRange().value()
         const headers = extractedData[0]
-        const sectionNumberIndex = findFieldIndex('section #', headers) || 0
-        const recommendationNumberIndex = findFieldIndex('recommendation #', headers) || 1
-        const titleIndex = findFieldIndex('title', headers) || 2
-        const statusIndex = findFieldIndex('status', headers) || 3
-        const scoringStatusIndex = findFieldIndex('scoring status', headers) || 4
-        const descriptionIndex = findFieldIndex('description', headers) || 5
-        const rationaleStatementIndex = findFieldIndex('rationale statement', headers) || 6
-        const remediationProcedureIndex = findFieldIndex('remediation procedure', headers) || 7
-        const auditProcedureIndex = findFieldIndex('audit procedure', headers) || 8
-        const impactStatementIndex = findFieldIndex('impact statement', headers) || 9
-        const notesIndex = findFieldIndex('notes', headers) || 10
-        const cisControlsIndex = findFieldIndex('CIS controls', headers) || 11
-        const cceIDIndex = findFieldIndex('CCE-ID', headers) || 12
-        const referencesIndex = findFieldIndex('references', headers) || 13
-
-        // Convert profile inspec.yml
-        const profileInfo: Record<string, string | number | undefined> = {
-          name: 'CIS Benchmark',
-          title: 'InSpec Profile',
-          maintainer: metadata.maintainer || 'The Authors',
-          copyright: metadata.copyright || 'The Authors',
-          copyright_email: metadata.copyright_email || 'you@example.com',
-          license: metadata.license || 'Apache-2.0',
-          summary: '"An InSpec Compliance Profile"',
-          version: metadata.version || '0.1.0',
-        }
-        fs.writeFileSync(path.join(flags.output, 'inspec.yml'), YAML.stringify(profileInfo))
-
-        // Write README.md
-        const readableMetadata: Record<string, string | number> = {}
-        Object.entries(profileInfo).forEach(async ([key, value]) => {
-        // Filter out any undefined values and omit summary and title
-          if (value && key !== 'summary' && key !== 'summary') {
-            readableMetadata[_.startCase(key)] = value
-          }
-        })
-        fs.writeFileSync(path.join(flags.output, 'README.md'), `# ${profileInfo.name}\n${profileInfo.summary}\n---\n${YAML.stringify(readableMetadata)}`)
+        const recommendationNumberIndex = findFieldIndex(mappings.id.toString(), headers) || 1
+        const titleIndex = findFieldIndex(mappings.title.toString(), headers) || 2
+        const descriptionIndex = findFieldIndex(mappings.desc.toString(), headers) || 5
+        const rationaleStatementIndex = findFieldIndex(mappings.rationale.toString(), headers) || 6
+        const remediationProcedureIndex = findFieldIndex(mappings['tags.fix'].toString(), headers) || 7
+        const auditProcedureIndex = findFieldIndex(mappings['tags.check'].toString(), headers) || 8
+        const cisControlsIndex = findFieldIndex(mappings['tags.cis'].toString(), headers) || 11
 
         // Convert controls
         extractedData.slice(1).forEach((control: (string | number)[]) => {
@@ -102,7 +112,6 @@ export default class Spreadsheet2HDF extends Command {
             // Ensure no duplicate control IDs are handled
             let controlId = control[recommendationNumberIndex].toString()
             while (completedIds.indexOf(controlId) !== -1) {
-              console.log(controlId)
               controlId += '0'
             }
             completedIds.push(controlId)
@@ -112,34 +121,92 @@ export default class Spreadsheet2HDF extends Command {
               title: control[titleIndex].toString(),
               desc: control[descriptionIndex].toString(),
               rationale: control[rationaleStatementIndex].toString(),
-              impact: targetSheet === 1 ? 0.5 : 0.7,
+              impact: mappings.severity as number,
               tags: {
+                nist: [],
                 check: control[auditProcedureIndex].toString(),
-                severity: targetSheet === 1 ? 'medium' : 'high',
+                fix: control[remediationProcedureIndex].toString(),
+                severity: impactNumberToSeverityString(Number.parseFloat(flags.severity)),
+                cis_level: targetSheet.toString(),
+                cis_rid: controlId,
+                cis_controls: [],
               },
             }
-            // if (control[cisControlsIndex]) {
-            //   console.log(control[cisControlsIndex].toString().match(/CONTROL:v(\d) (\d+)\.?(\d*)/g))
-            // }
+            if (control[cisControlsIndex]) {
+              const cisControls = control[cisControlsIndex].toString().match(/CONTROL:v(\d) (\d+)\.?(\d*)/g)
+              if (cisControls) {
+                cisControls.map(cisControl => cisControl.split(' ')).forEach(([revision, cisControl]) => {
+                  const controlRevision = revision.split('CONTROL:v')[1]
+                  inspecControl.tags.cis_controls?.push(cisControl, `Rev_${controlRevision}`)
+                  console.log(revision)
+                  if (cisControl in CISNistMappings) {
+                    inspecControl.tags.nist?.push(_.get(CISNistMappings, cisControl))
+                  }
+                })
+              }
+            }
             inspecControls.push(inspecControl)
           }
         })
       })
-    }).catch((error: any) => {
-      console.log(error)
+    }).catch(() => {
+      // Assume we have a CSV file
+      // Read the input file into lines
+      const inputDataLines = fs.readFileSync(flags.input, 'utf-8').split('\n')
+      // Replace BOM if it exists
+      inputDataLines[0] = inputDataLines[0].replace(/\uFEFF/g, '')
+      // STIG Viewer embeds the classification level in the first and last line for CSV export, breaking parsing
+      if (inputDataLines[0].match(/~~~~~.*~~~~~/)?.length) {
+        inputDataLines.shift()
+      }
+      if (inputDataLines[inputDataLines.length - 1].match(/~~~~~.*~~~~~/)?.length) {
+        inputDataLines.pop()
+      }
+
+      // Read mapping file
+      if (flags.mapping) {
+        if (fs.existsSync(flags.mapping)) {
+          mappings = YAML.parse(fs.readFileSync(flags.mapping, 'utf-8'))
+        } else {
+          throw new Error('Passed metadata file does not exist')
+        }
+      } else {
+        mappings = YAML.parse(fs.readFileSync(path.join(getInstalledPath(), 'src', 'resources', 'csv.mapping.yml'), 'utf-8'))
+      }
+
+      const records: CSVControl[] = parse(inputDataLines.join('\n'), {
+        columns: true,
+        skip_empty_lines: true,
+      })
+
+      records.forEach(record => {
+        const newControl: Partial<InSpecControl> = {
+          tags: {
+            nist: [],
+            severity: impactNumberToSeverityString(extractValueViaPathOrNumber('mappings.impact', mappings.impact, record)),
+          },
+        }
+        Object.entries(mappings).forEach(mapping => {
+          if (mapping[0] === 'title' && flags.controlNamePrefix) {
+            _.set(newControl, mapping[0].toLowerCase(), `${flags.controlNamePrefix ? flags.controlNamePrefix + '-' : ''}${extractValueViaPathOrNumber(mapping[0], mapping[1], record)}`)
+          }
+          _.set(newControl, mapping[0].toLowerCase(), extractValueViaPathOrNumber(mapping[0], mapping[1], record))
+        })
+        if (newControl.tags && newControl.tags?.cci) {
+          newControl.tags.nist = []
+          newControl.tags.cci.forEach(cci => {
+            if (cci in CCINistMappings) {
+              newControl.tags?.nist?.push(_.get(CCINistMappings, cci))
+            }
+          })
+        }
+        inspecControls.push(newControl as unknown as InSpecControl)
+      })
     })
 
     // Convert all extracted controls to Ruby/InSpec code
-    if (flags.singleFile) {
-      const controlOutfile = fs.createWriteStream(path.join(flags.output, 'controls', 'controls.rb'), {flags: 'w'})
-      inspecControls.forEach(async control => {
-        controlOutfile.write(inspecControlToRubyCode(control) + '\n\n')
-      })
-      controlOutfile.close()
-    } else {
-      inspecControls.forEach(control => {
-        fs.writeFileSync(path.join(flags.output, 'controls', control.id + '.rb'), inspecControlToRubyCode(control))
-      })
-    }
+    inspecControls.forEach(control => {
+      fs.writeFileSync(path.join(flags.output, 'controls', control.id + '.rb'), inspecControlToRubyCode(control))
+    })
   }
 }

@@ -1,0 +1,22 @@
+id:
+  - V_ID
+  - Vuln ID
+title:
+  - Title
+  - Rule Title
+desc:
+  - Description
+  - Discussion
+impact: 0.5
+tags.check:
+  - checktext
+  - Check Content
+tags.fix:
+  - fixtext
+  - Fix Text
+tags.rid:
+  - ruleID
+tags.stig_id:
+  - Version
+tags.CCI:
+  - CCI
