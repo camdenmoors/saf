@@ -25,7 +25,6 @@ export default class Spreadsheet2HDF extends Command {
     controlNamePrefix: flags.string({char: 'c', required: false, default: '', description: 'Prefix for all control IDs'}),
     metadata: flags.string({char: 'm', required: false, description: 'Path to a JSON file with additional metadata for the inspec.yml file'}),
     mapping: flags.string({char: 'M', required: false, description: 'Path to a YAML file with mappings for each field, by default, CIS Benchmark fields are used for XLSX, STIG Viewer CSV export is used by CSV'}),
-    severity: flags.string({char: 's', required: false, description: 'Control severity level', default: '0.5', options: ['0.0', '0.1', '0.4', '0.7', '0.9', '1.0']}),
     output: flags.string({char: 'o', required: true}),
   }
 
@@ -123,12 +122,12 @@ export default class Spreadsheet2HDF extends Command {
                 title: (control[titleIndex] || '').toString(),
                 desc: (control[descriptionIndex] || '').toString(),
                 rationale: (control[rationaleStatementIndex] || '').toString(),
-                impact: mappings.severity as number,
+                impact: mappings.impact as number,
                 tags: {
                   nist: [],
                   check: (control[auditProcedureIndex] || '').toString(),
                   fix: (control[remediationProcedureIndex] || '').toString(),
-                  severity: impactNumberToSeverityString(Number.parseFloat(flags.severity)),
+                  severity: impactNumberToSeverityString(Number.parseFloat(mappings.impact.toString() || '0.5')),
                   cis_level: (targetSheet || '').toString(),
                   cis_rid: controlId,
                   cis_controls: [],
