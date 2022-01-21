@@ -34,8 +34,8 @@ export function getInstalledPath(): string {
 
 export const arrayedPaths = ['tags.CCI', 'tags.NIST']
 
-export function findFieldIndex(field: string, fields: (string | number)[]) {
-  return field in fields ? fields.indexOf(field) : undefined
+export function findFieldIndex(field: string, fields: (string | number)[], defaultIndex: number) {
+  return fields.indexOf(field) === -1 ? defaultIndex : fields.indexOf(field)
 }
 
 export function arrayNeededPaths(typeOfPath: string, values: any) {

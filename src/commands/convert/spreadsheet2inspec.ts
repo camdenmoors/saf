@@ -96,60 +96,63 @@ export default class Spreadsheet2HDF extends Command {
 
       targetSheets.forEach(targetSheet => {
         const sheet = workBook.sheet(targetSheet)
-        const extractedData: (string | number)[][] = sheet.usedRange().value()
-        const headers = extractedData[0]
-        const recommendationNumberIndex = findFieldIndex(mappings.id.toString(), headers) || 1
-        const titleIndex = findFieldIndex(mappings.title.toString(), headers) || 2
-        const descriptionIndex = findFieldIndex(mappings.desc.toString(), headers) || 5
-        const rationaleStatementIndex = findFieldIndex(mappings.rationale.toString(), headers) || 6
-        const remediationProcedureIndex = findFieldIndex(mappings['tags.fix'].toString(), headers) || 7
-        const auditProcedureIndex = findFieldIndex(mappings['tags.check'].toString(), headers) || 8
-        const cisControlsIndex = findFieldIndex(mappings['tags.cis'].toString(), headers) || 11
+        const usedRange = sheet.usedRange()
+        if (usedRange) {
+          const extractedData: (string | number)[][] = usedRange.value()
+          const headers = extractedData[0]
+          const recommendationNumberIndex = findFieldIndex(mappings.id.toString(), headers, 1)
+          const titleIndex = findFieldIndex(mappings.title.toString(), headers, 2)
+          const descriptionIndex = findFieldIndex(mappings.desc.toString(), headers, 5)
+          const rationaleStatementIndex = findFieldIndex(mappings.rationale.toString(), headers, 6)
+          const remediationProcedureIndex = findFieldIndex(mappings['tags.fix'].toString(), headers, 7)
+          const auditProcedureIndex = findFieldIndex(mappings['tags.check'].toString(), headers, 8)
+          const cisControlsIndex = findFieldIndex(mappings['tags.cis'].toString(), headers, 11)
 
-        // Convert controls
-        extractedData.slice(1).forEach((control: (string | number)[]) => {
-          if (control[recommendationNumberIndex]) {
+          // Convert controls
+          extractedData.slice(1).forEach((control: (string | number)[]) => {
+            if (control[recommendationNumberIndex]) {
             // Ensure no duplicate control IDs are handled
-            let controlId = control[recommendationNumberIndex].toString()
-            while (completedIds.indexOf(controlId) !== -1) {
-              controlId += '0'
-            }
-            completedIds.push(controlId)
-            // Extract control info
-            const inspecControl: InSpecControl = {
-              id: `${flags.controlNamePrefix ? flags.controlNamePrefix + '-' : ''}${controlId}`,
-              title: control[titleIndex].toString(),
-              desc: control[descriptionIndex].toString(),
-              rationale: control[rationaleStatementIndex].toString(),
-              impact: mappings.severity as number,
-              tags: {
-                nist: [],
-                check: control[auditProcedureIndex].toString(),
-                fix: control[remediationProcedureIndex].toString(),
-                severity: impactNumberToSeverityString(Number.parseFloat(flags.severity)),
-                cis_level: targetSheet.toString(),
-                cis_rid: controlId,
-                cis_controls: [],
-              },
-            }
-            if (control[cisControlsIndex]) {
-              const cisControls = control[cisControlsIndex].toString().match(/CONTROL:v(\d) (\d+)\.?(\d*)/g)
-              if (cisControls) {
-                cisControls.map(cisControl => cisControl.split(' ')).forEach(([revision, cisControl]) => {
-                  const controlRevision = revision.split('CONTROL:v')[1]
+              let controlId = control[recommendationNumberIndex].toString()
+              while (completedIds.indexOf(controlId) !== -1) {
+                controlId += '0'
+              }
+              completedIds.push(controlId)
+              // Extract control info
+              const inspecControl: InSpecControl = {
+                id: `${flags.controlNamePrefix ? flags.controlNamePrefix + '-' : ''}${controlId}`,
+                title: (control[titleIndex] || '').toString(),
+                desc: (control[descriptionIndex] || '').toString(),
+                rationale: (control[rationaleStatementIndex] || '').toString(),
+                impact: mappings.severity as number,
+                tags: {
+                  nist: [],
+                  check: (control[auditProcedureIndex] || '').toString(),
+                  fix: (control[remediationProcedureIndex] || '').toString(),
+                  severity: impactNumberToSeverityString(Number.parseFloat(flags.severity)),
+                  cis_level: (targetSheet || '').toString(),
+                  cis_rid: controlId,
+                  cis_controls: [],
+                },
+              }
+              if (control[cisControlsIndex]) {
+                const cisControls = control[cisControlsIndex].toString().match(/CONTROL:v(\d) (\d+)\.?(\d*)/g)
+                if (cisControls) {
+                  cisControls.map(cisControl => cisControl.split(' ')).forEach(([revision, cisControl]) => {
+                    const controlRevision = revision.split('CONTROL:v')[1]
                   inspecControl.tags.cis_controls?.push(cisControl, `Rev_${controlRevision}`)
-                  console.log(revision)
                   if (cisControl in CISNistMappings) {
                     inspecControl.tags.nist?.push(_.get(CISNistMappings, cisControl))
                   }
-                })
+                  })
+                }
               }
+              inspecControls.push(inspecControl)
             }
-            inspecControls.push(inspecControl)
-          }
-        })
+          })
+        }
       })
-    }).catch(() => {
+    }).catch(error => {
+      console.log(error)
       // Assume we have a CSV file
       // Read the input file into lines
       const inputDataLines = fs.readFileSync(flags.input, 'utf-8').split('\n')
